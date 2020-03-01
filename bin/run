@@ -1,0 +1,137 @@
+<?php
+
+require __DIR__ . '/../vendor/autoload.php';
+
+use MathPHP\Statistics\ANOVA;
+use Oefenweb\Statistics\Statistics;
+use function Amp\ParallelFunctions\parallelMap;
+use function Amp\Promise\wait;
+
+//$responses = wait(parallelMap([
+//    __DIR__.'/../input/a_example.txt',
+//], function ($filename) {
+//    $handle = fopen($filename, "r");
+//    return fgetcsv($handle);
+//}));
+
+const LIBRARY_ID = 'id';
+const LIBRARY_PARAMS = 'params';
+const LIBRARY_BOOKS = 'books';
+const LIBRARY_BOOK_STATS = 'stats';
+
+const NUMBER_OF_BOOKS = 'number_of_books';
+const NUMBER_OF_DAYS = 'number_of_days';
+const NUMBER_OF_BOOKS_PER_DAY = 'number_of_books_per_day';
+
+$calculate_stats = fn ($scores) => [
+    'sum' => Statistics::sum($scores),
+    'min' => Statistics::min($scores),
+    'max' => Statistics::max($scores),
+    'mean' => Statistics::mean($scores),
+    'variance' => Statistics::variance($scores),
+    'standard_deviation' => Statistics::standardDeviation($scores),
+];
+
+$input_path = __DIR__.'/../input/';
+$output_path = __DIR__.'/../output/';
+$filename = 'a_example.txt';
+$full_path = $input_path . $filename;
+
+$handle = fopen($full_path, "r");
+
+$read_line = fn () => array_map('intval', fgetcsv($handle, 0, ' '));
+
+[$number_of_books, $number_of_libraries, $number_of_days] = $read_line();
+$book_scores = $read_line();
+
+$libraries = [];
+for ($id = 0; $id < $number_of_libraries; $id++) {
+    $library_params = $read_line();
+    $library_books = $read_line();
+    $libraries[] = [
+        LIBRARY_ID => $id,
+        LIBRARY_PARAMS => array_combine([NUMBER_OF_BOOKS, NUMBER_OF_DAYS, NUMBER_OF_BOOKS_PER_DAY], $library_params),
+        LIBRARY_BOOKS => $library_books,
+        LIBRARY_BOOK_STATS => $calculate_stats($library_books)
+    ];
+}
+
+$allocations = run($number_of_days, $libraries);
+$score = calcScore($book_scores, $allocations);
+
+echo $score;
+
+function writeOutputFile(string $output_path, string $filename, $allocations)
+{
+    $handle = fopen($output_path . $filename, "w");
+
+    $writeLine = fn ($fields) => fputcsv($handle, $fields, ' ');
+
+}
+
+function calcScore(array $book_scores, array $allocations): int
+{
+    $score = 0;
+    foreach ($allocations as $books) {
+        foreach ($books as $book_id) {
+            $score += $book_scores[$book_id];
+        }
+    }
+    return $score;
+}
+
+function run(int $number_of_days, array $libraries) {
+    $inactive_libraries = array_column($libraries, LIBRARY_ID);
+    $signing_up_library_id = null;
+    $signed_up_libraries = [];
+    $sign_up_remaining_days = 0;
+
+    $scanned_books = [];
+    $allocations = [];
+
+    for ($current_day = 0; $current_day < $number_of_days; $current_day++) {
+        if (null !== $signing_up_library_id) {
+            $sign_up_remaining_days--;
+
+            if ($sign_up_remaining_days === 0) {
+                $signed_up_libraries[] = $signing_up_library_id;
+                $signing_up_library_id = null;
+            }
+        } else {
+            if (!empty($inactive_libraries)) {
+                $signing_up_library_id = head($inactive_libraries);
+                $inactive_libraries = tail($inactive_libraries);
+                $sign_up_remaining_days = $libraries[$signing_up_library_id][LIBRARY_PARAMS][NUMBER_OF_DAYS] - 1;
+            }
+        }
+
+        foreach ($signed_up_libraries as $library_id) {
+            $library_max_books_per_day = $libraries[$library_id][LIBRARY_PARAMS][NUMBER_OF_BOOKS_PER_DAY];
+            $library_books = &$libraries[$library_id][LIBRARY_BOOKS];
+            $scanned_books_count = 0;
+            while ($scanned_books_count < $library_max_books_per_day && $next_book_id = next($library_books)) {
+                if (!in_array($next_book_id, $scanned_books)) {
+                    $scanned_books[] = $next_book_id;
+                    $allocations[$library_id][] = $next_book_id;
+                    $scanned_books_count++;
+                }
+            }
+        }
+    }
+
+    return $allocations;
+}
+
+
+function head(array $array)
+{
+    if (empty($array)) {
+        throw new \InvalidArgumentException();
+    }
+    return array_slice(array_values($array), 0, 1)[0];
+}
+
+function tail(array $array): array
+{
+    return array_slice(array_values($array), 1);
+}
